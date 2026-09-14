@@ -1,0 +1,457 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Агент миграции ГИС — модель памяти</title>
+  <style>
+    :root { --кратко:#3b82f6; --рабочая:#d97706; --долго:#059669; --ядро:#6b7280; }
+    body { font-family: system-ui, sans-serif; max-width: 1280px; margin: 24px auto; padding: 0 16px;
+           color:#111827; }
+    h1 { margin-bottom: 2px; font-size: 1.4rem; }
+    .idea { color:#6b7280; font-size:.86rem; margin-top:0; }
+    .раскладка { display:grid; grid-template-columns: 1.35fr 1fr; gap:18px; align-items:start; }
+    @media (max-width: 960px) { .раскладка { grid-template-columns: 1fr; } }
+    .панель { display:flex; gap:14px; align-items:flex-end; flex-wrap:wrap; margin-bottom:12px;
+              padding:10px 14px; border:1px solid #e5e7eb; border-radius:8px; background:#fafafa; }
+    .панель label { display:flex; flex-direction:column; font-size:.78rem; color:#374151; gap:3px; }
+    .панель select, .панель input { padding:6px 10px; font-size:.9rem; border:1px solid #d1d5db;
+                                    border-radius:6px; }
+    .слои { display:flex; gap:12px; font-size:.82rem; align-items:center; }
+    .слои label { flex-direction:row; align-items:center; gap:5px; }
+    #чат { border:1px solid #e5e7eb; border-radius:8px; padding:12px; height:390px;
+           overflow-y:auto; background:#fafafa; }
+    .msg { margin:8px 0; padding:10px 14px; border-radius:8px; white-space:pre-wrap; line-height:1.45;
+           font-size:.92rem; }
+    .от-пользователя { background:#dbeafe; margin-left:14%; }
+    .от-агента { background:#fff; border:1px solid #e5e7eb; margin-right:6%; }
+    .ошибка { background:#fde8e8; color:#9b1c1c; }
+    .системное { background:transparent; color:#6b7280; font-size:.82rem; text-align:center; }
+    .строка-ввода { display:flex; gap:8px; margin-top:12px; }
+    textarea { flex:1; padding:10px; font-size:.95rem; font-family:inherit; border:1px solid #d1d5db;
+               border-radius:8px; resize:vertical; }
+    button { padding:9px 16px; font-size:.92rem; cursor:pointer; border:1px solid #d1d5db;
+             border-radius:8px; background:#fff; }
+    button.главная { background:#2563eb; color:#fff; border-color:#2563eb; }
+    button:disabled { opacity:.5; cursor:default; }
+    .кнопки { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+    .карточка { border:1px solid #e5e7eb; border-radius:8px; padding:10px 14px; margin-bottom:12px; }
+    .карточка h2 { font-size:.95rem; margin:0 0 6px; display:flex; justify-content:space-between; }
+    .карточка.кратко { border-left:5px solid var(--кратко); }
+    .карточка.рабочая { border-left:5px solid var(--рабочая); }
+    .карточка.долго { border-left:5px solid var(--долго); }
+    .карточка.выключен { opacity:.45; }
+    .счётчик { color:#6b7280; font-weight:normal; font-size:.8rem; }
+    .записи { font-size:.8rem; color:#374151; margin:0; padding-left:16px; }
+    .записи li { margin:2px 0; }
+    .путь { font-family:ui-monospace, monospace; font-size:.72rem; color:#6b7280; margin-top:6px;
+            word-break:break-all; }
+    table { border-collapse:collapse; width:100%; font-size:.8rem; margin-top:6px; }
+    th, td { border:1px solid #e5e7eb; padding:4px 7px; text-align:left; vertical-align:top; }
+    th { background:#f3f4f6; }
+    td.вкл { color:#065f46; } td.выкл { color:#9ca3af; }
+    .бейдж { display:inline-block; padding:1px 7px; border-radius:10px; font-size:.72rem;
+             color:#fff; }
+    .бейдж.краткосрочная { background:var(--кратко); }
+    .бейдж.рабочая { background:var(--рабочая); }
+    .бейдж.долговременная { background:var(--долго); }
+    .бейдж.ядро, .бейдж.запрос { background:var(--ядро); }
+    details { margin-top:14px; border:1px solid #e5e7eb; border-radius:8px; padding:10px 14px; }
+    summary { cursor:pointer; font-weight:600; }
+    code { background:#f4f4f5; padding:1px 4px; border-radius:4px; font-size:.85em; }
+    .мета { color:#6b7280; font-size:.78rem; margin:2px 0 10px 0; }
+    .нарушение { background:#fef3c7; border-left:4px solid #d97706; padding:6px 10px;
+                 border-radius:6px; font-size:.82rem; margin:6px 0; }
+  </style>
+</head>
+<body>
+  <h1>Агент миграции ГИС — модель памяти</h1>
+  <p class="idea">
+    Три слоя памяти хранятся раздельно: диалог — в SQLite, состояние задачи — в JSON на задачу,
+    профиль, решения и знания — тремя файлами на пользователя. Справа видно, что в каждом из них
+    лежит, а под ответом — что именно из них ушло в промпт.
+  </p>
+
+  <div class="панель">
+    <label>Модель
+      <select id="модель">
+        <option value="">по роли (планирование/исполнение)</option>
+        {% for м in models %}
+        <option value="{{ м.key }}" {% if not м.available %}disabled{% endif %}>
+          {{ м.label }} — {{ м.price_text }}{% if not м.available %} (нет ключа){% endif %}
+        </option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Маршрутизатор
+      <select id="маршрутизатор">
+        <option value="авто">авто — пишет сам выше порога</option>
+        <option value="спросить">спросить — только предлагает</option>
+        <option value="выкл">выкл — только явные записи</option>
+      </select>
+    </label>
+    <div class="слои">
+      <span style="font-size:.78rem;color:#374151">Читать слои:</span>
+      <label><input type="checkbox" class="слой" value="кратко" checked> краткосрочную</label>
+      <label><input type="checkbox" class="слой" value="рабочая" checked> рабочую</label>
+      <label><input type="checkbox" class="слой" value="долго" checked> долговременную</label>
+    </div>
+    <span class="счётчик" id="сводка"></span>
+  </div>
+
+  <div class="раскладка">
+    <div>
+      <div id="чат"></div>
+      <div class="строка-ввода">
+        <textarea id="ввод" rows="2" placeholder="Вопрос агенту…"></textarea>
+        <button id="отправить" class="главная">Спросить</button>
+      </div>
+      <div class="кнопки">
+        <button id="план">Составить план</button>
+        <button id="забыть">Забыть диалог</button>
+      </div>
+
+      <div class="карточка" style="margin-top:14px">
+        <h2>Задача <span class="счётчик" id="стадия"></span></h2>
+        <div class="панель" style="margin:0;background:#fff;border:none;padding:0">
+          <label>Задача
+            <select id="задача"><option value="">— нет —</option></select>
+          </label>
+          <label>Новая
+            <input id="новая-задача" placeholder="идентификатор" size="16">
+          </label>
+          <label>Название
+            <input id="название" placeholder="что делаем" size="22">
+          </label>
+          <button id="создать">Завести</button>
+        </div>
+        <div class="кнопки" id="переходы"></div>
+        <div class="панель" style="margin:8px 0 0;background:#fff;border:none;padding:0">
+          <label>Шаг задачи
+            <input id="шаг-ключ" placeholder="ключ" size="14">
+          </label>
+          <label>Значение
+            <input id="шаг-значение" placeholder="что выяснили" size="24">
+          </label>
+          <button id="записать-шаг">В рабочую память</button>
+          <button id="завершить">Завершить и свернуть в решение</button>
+        </div>
+      </div>
+
+      <div class="карточка" style="margin-top:0">
+        <h2>Записать вручную</h2>
+        <div class="панель" style="margin:0;background:#fff;border:none;padding:0">
+          <label>Слой
+            <select id="куда">
+              <option value="знания">знания</option>
+              <option value="профиль">профиль</option>
+              <option value="решения">решения</option>
+              <option value="рабочая">рабочая память задачи</option>
+            </select>
+          </label>
+          <label>Ключ / раздел
+            <input id="ключ" placeholder="имя записи" size="14">
+          </label>
+          <label>Текст
+            <input id="значение" placeholder="что запомнить" size="30">
+          </label>
+          <button id="запомнить">Записать</button>
+        </div>
+        <p class="мета">Это правило «явное-указание»: модель не участвует, запись идёт туда, куда сказано.</p>
+      </div>
+
+      <div id="трейс"></div>
+    </div>
+
+    <div id="слои-панель"></div>
+  </div>
+
+  <details>
+    <summary>❓ Справка по форме</summary>
+    <p><b>Читать слои</b> — какие слои памяти агент возьмёт в промпт. Снятая галочка не стирает
+    слой, а только закрывает его на чтение. Задайте один и тот же вопрос с галочкой и без —
+    разницу видно в разборе промпта под ответом. Это и есть аблация из задания.</p>
+    <p><b>Маршрутизатор</b> — что делать со свободной репликой. В режиме «авто» дешёвая модель
+    решает, есть ли в реплике факт для долговременной памяти, и записывает сама, если уверена
+    выше порога. «Спросить» — только предлагает. «Выкл» — в долговременную память попадает
+    лишь то, что вы записали руками.</p>
+    <p><b>Задача</b> — рабочая память. Стадии идут по кругу
+    <code>planning → execution → validation → done</code>; кнопки перехода показывают только
+    разрешённые направления, остальные агент отклонит. «Завершить» сворачивает задачу в одну
+    запись журнала решений и очищает её рабочую память.</p>
+    <p><b>Записать вручную</b> — прямая запись в выбранный слой без участия модели.</p>
+    <p><b>Разбор промпта</b> под ответом показывает каждый блок: из какого он слоя, сколько занял
+    токенов и почему включён или пропущен. Строки со знаком «−» — то, что агент решил НЕ брать,
+    и это не менее важно: контекст тем и ценен, что в нём нет лишнего.</p>
+    <p><b>Модель</b> — «по роли» означает, что на стадии планирования и на остальных стадиях
+    работают разные модели (см. <code>python cli.py --роли</code>). Явный выбор фиксирует одну.</p>
+  </details>
+
+<script>
+const $ = (id) => document.getElementById(id);
+let состояние = null;
+
+const слоиФормы = () =>
+  [...document.querySelectorAll('.слой')].filter(в => в.checked).map(в => в.value);
+
+const параметры = () => ({
+  layers: слоиФормы(),
+  router: $('маршрутизатор').value,
+  model: $('модель').value,
+  task: $('задача').value,
+});
+
+function добавить(текст, класс) {
+  const узел = document.createElement('div');
+  узел.className = 'msg ' + класс;
+  узел.textContent = текст;
+  $('чат').appendChild(узел);
+  $('чат').scrollTop = $('чат').scrollHeight;
+  return узел;
+}
+
+async function запрос(адрес, тело) {
+  const ответ = await fetch(адрес, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(тело),
+  });
+  const данные = await ответ.json();
+  if (!ответ.ok) throw new Error(данные.error || 'ошибка сервера');
+  return данные;
+}
+
+function нарисоватьСлои(с) {
+  const включены = с.info.layers;
+  const кратко = с.stats['краткосрочная'], рабочая = с.stats['рабочая'], долго = с.stats['долговременная'];
+  const активен = (имя) => включены.includes(имя) ? '' : ' выключен';
+
+  const диалог = с.dialog.slice(-6).map(м =>
+    `<li><b>${м.role === 'user' ? 'вы' : 'агент'}:</b> ${экранировать(м.content).slice(0, 110)}…</li>`).join('');
+
+  const задачи = с.tasks.map(з =>
+    `<li><b>${экранировать(з.task_id)}</b> — ${з.stage_label}, план ${з.plan_steps}, собрано ${з.collected}</li>`).join('')
+    || '<li>задач нет</li>';
+
+  const инварианты = (с.profile['инварианты'] || []).map(и =>
+    `<li>${экранировать(и['правило'])} <span class="счётчик">(${и['тип']})</span></li>`).join('');
+  const ограничения = Object.entries(с.profile['ограничения'] || {}).map(([к, з]) =>
+    `<li><b>${экранировать(к)}:</b> ${экранировать(з)}</li>`).join('');
+  const знания = с.knowledge.slice(0, 5).map(ф =>
+    `<li><b>${экранировать(ф.id)}</b> — ${экранировать(ф['текст']).slice(0, 90)}…</li>`).join('');
+  const решения = с.decisions.slice(-3).map(р =>
+    `<li><b>${экранировать(р['заголовок'])}</b> — ${экранировать(р['решение']).slice(0, 90)}…</li>`).join('');
+
+  const журнал = с.journal.slice(-8).reverse().map(з =>
+    `<tr><td>${з['правило']}</td>
+         <td><span class="бейдж ${з['слой']}">${з['слой']}${з['подслой'] ? '/' + экранировать(з['подслой']) : ''}</span></td>
+         <td class="${з['применено'] ? 'вкл' : 'выкл'}">${з['применено'] ? 'записано' : 'нет'}</td>
+         <td>${экранировать(з['причина'] || '').slice(0, 70)}</td></tr>`).join('');
+
+  $('слои-панель').innerHTML = `
+    <div class="карточка кратко${активен('краткосрочная')}">
+      <h2>Краткосрочная <span class="счётчик">${кратко['реплик']} реплик, ${кратко['символов']} симв.</span></h2>
+      <ul class="записи">${диалог || '<li>диалог пуст</li>'}</ul>
+      <div class="путь">${кратко['файл']}</div>
+    </div>
+    <div class="карточка рабочая${активен('рабочая')}">
+      <h2>Рабочая <span class="счётчик">${рабочая['задач']} задач</span></h2>
+      <ul class="записи">${задачи}</ul>
+      <div class="путь">${рабочая['каталог']}</div>
+    </div>
+    <div class="карточка долго${активен('долговременная')}">
+      <h2>Долговременная <span class="счётчик">профиль ${долго['профиль']}, знаний ${долго['знаний']}, решений ${долго['решений']}</span></h2>
+      <p class="мета" style="margin:4px 0 2px"><b>Инварианты (${долго['инвариантов']})</b></p>
+      <ul class="записи">${инварианты}</ul>
+      <p class="мета" style="margin:8px 0 2px"><b>Ограничения</b></p>
+      <ul class="записи">${ограничения}</ul>
+      <p class="мета" style="margin:8px 0 2px"><b>Знания</b> (первые 5 из ${долго['знаний']})</p>
+      <ul class="записи">${знания}</ul>
+      <p class="мета" style="margin:8px 0 2px"><b>Решения</b></p>
+      <ul class="записи">${решения || '<li>журнал пуст</li>'}</ul>
+      <div class="путь">${долго['каталог']}</div>
+    </div>
+    <div class="карточка">
+      <h2>Журнал маршрутизации</h2>
+      <table><tr><th>правило</th><th>слой</th><th>?</th><th>почему</th></tr>${журнал}</table>
+    </div>`;
+}
+
+function нарисоватьТрейс(ответ) {
+  const строки = ответ.trace.map(б => `
+    <tr>
+      <td>${б['включён'] ? '+' : '−'}</td>
+      <td><span class="бейдж ${б['слой']}">${б['слой']}</span></td>
+      <td>${б['блок']}</td>
+      <td>${б['токенов']}</td>
+      <td>${экранировать(б['почему'])}${б['включён'] && б['записи'].length
+          ? '<br><span class="счётчик">' + б['записи'].slice(0, 4).map(экранировать).join(' · ') + '</span>'
+          : ''}</td>
+    </tr>`).join('');
+
+  const посл = Object.entries(ответ.layers).map(([слой, д]) =>
+    `<span class="бейдж ${слой}">${слой}</span> ${д['записей']} записей, ${д['токенов']} т.`).join(' &nbsp; ');
+
+  let замечания = '';
+  if (ответ.violations.length) {
+    замечания += `<div class="нарушение">Нарушены инварианты (попыток ${ответ.attempts}): ` +
+      ответ.violations.map(н => экранировать(н['правило'] + ' — «' + н['найдено'] + '» в блоке ' + н['где'])).join('; ') + '</div>';
+  } else if (ответ.attempts > 1) {
+    замечания += `<div class="нарушение">Первая попытка нарушила инвариант, исправлено с попытки ${ответ.attempts}` +
+      (ответ.escalated_to ? `, эскалация на ${ответ.escalated_to}` : '') + '.</div>';
+  }
+  if (ответ.routing_entry && ответ.routing_entry['слой']) {
+    const р = ответ.routing_entry;
+    замечания += `<p class="мета">Маршрутизатор: ${р['применено'] ? 'записано' : 'не записано'} →
+      ${р['слой']}${р['подслой'] ? '/' + р['подслой'] : ''} — ${экранировать(р['причина'] || '')}</p>`;
+  }
+
+  $('трейс').innerHTML = `
+    <div class="карточка">
+      <h2>Что ушло в промпт <span class="счётчик">стадия: ${ответ.stage || '—'}</span></h2>
+      ${замечания}
+      <table><tr><th></th><th>слой</th><th>блок</th><th>токенов</th><th>почему</th></tr>${строки}</table>
+      <p class="мета">${посл}</p>
+    </div>`;
+}
+
+function экранировать(текст) {
+  const узел = document.createElement('div');
+  узел.textContent = текст === undefined || текст === null ? '' : String(текст);
+  return узел.innerHTML;
+}
+
+function нарисоватьЗадачу(с) {
+  const выбор = $('задача');
+  const текущая = с.info.task ? с.info.task.task_id : '';
+  выбор.innerHTML = '<option value="">— нет —</option>' +
+    с.tasks.map(з => `<option value="${экранировать(з.task_id)}" ${з.task_id === текущая ? 'selected' : ''}>
+      ${экранировать(з.task_id)} (${з.stage_label})</option>`).join('');
+
+  $('стадия').textContent = с.info.task
+    ? `стадия ${с.info.stage}; дальше: ${с.info.allowed.join(', ') || 'только завершить'}`
+    : 'задача не выбрана';
+
+  $('переходы').innerHTML = (с.info.allowed || []).map(э =>
+    `<button data-стадия="${э}">→ ${э}</button>`).join('');
+  document.querySelectorAll('#переходы button').forEach(кнопка => {
+    кнопка.onclick = () => действиеЗадачи({action: 'стадия', stage: кнопка.dataset['стадия']});
+  });
+
+  $('сводка').textContent =
+    `${с.info.model_key} · слои: ${с.info.layers.join(', ') || 'ни одного'} · ` +
+    `вызовов ${с.info.spent.calls}, токенов ${с.info.spent.tokens}`;
+}
+
+function применить(с) {
+  состояние = с;
+  нарисоватьСлои(с);
+  нарисоватьЗадачу(с);
+}
+
+async function действиеЗадачи(тело) {
+  try {
+    const данные = await запрос('/api/task', Object.assign(параметры(), тело));
+    if (данные.decision) {
+      добавить(`Задача свёрнута в решение №${данные.decision.id}: ${данные.decision['заголовок']}`, 'системное');
+    }
+    применить(данные.state);
+  } catch (ошибка) {
+    добавить('Ошибка: ' + ошибка.message, 'ошибка');
+  }
+}
+
+async function спросить(адрес, вопрос) {
+  $('отправить').disabled = true;
+  const ожидание = добавить('…', 'системное');
+  try {
+    const данные = await запрос(адрес, Object.assign(параметры(), {question: вопрос}));
+    ожидание.remove();
+    добавить(данные.answer.text, 'от-агента');
+    const р = данные.answer.usage;
+    добавить(`${р.model_key}: ${р.total_tokens} токенов, ${р.elapsed} с`, 'системное');
+    нарисоватьТрейс(данные.answer);
+    применить(данные.state);
+  } catch (ошибка) {
+    ожидание.remove();
+    добавить('Ошибка: ' + ошибка.message, 'ошибка');
+  } finally {
+    $('отправить').disabled = false;
+  }
+}
+
+$('отправить').onclick = () => {
+  const вопрос = $('ввод').value.trim();
+  if (!вопрос) return;
+  добавить(вопрос, 'от-пользователя');
+  $('ввод').value = '';
+  спросить('/api/ask', вопрос);
+};
+
+$('ввод').addEventListener('keydown', (событие) => {
+  if (событие.key === 'Enter' && !событие.shiftKey) { событие.preventDefault(); $('отправить').click(); }
+});
+
+$('план').onclick = async () => {
+  добавить('Составить план задачи', 'от-пользователя');
+  спросить('/api/plan', '');
+};
+
+$('забыть').onclick = async () => {
+  const данные = await запрос('/api/forget', {});
+  $('чат').innerHTML = '';
+  добавить(`Краткосрочная память очищена: реплик стёрто ${данные.cleared}. ` +
+           'Рабочая и долговременная не тронуты.', 'системное');
+  применить(данные.state);
+};
+
+$('создать').onclick = () => действиеЗадачи({
+  action: 'создать',
+  task_id: $('новая-задача').value.trim(),
+  title: $('название').value.trim(),
+});
+
+$('задача').onchange = () => действиеЗадачи({
+  action: $('задача').value ? 'взять' : 'отпустить',
+  task_id: $('задача').value,
+});
+
+$('записать-шаг').onclick = () => действиеЗадачи({
+  action: 'шаг', key: $('шаг-ключ').value.trim(), value: $('шаг-значение').value.trim(),
+});
+
+$('завершить').onclick = () => действиеЗадачи({action: 'завершить'});
+
+$('запомнить').onclick = async () => {
+  try {
+    const данные = await запрос('/api/remember', {
+      target: $('куда').value,
+      key: $('ключ').value.trim(),
+      section: $('ключ').value.trim(),
+      value: $('значение').value.trim(),
+    });
+    добавить(`Записано в ${данные.entry['слой']}` +
+             (данные.entry['подслой'] ? '/' + данные.entry['подслой'] : '') +
+             ' по правилу «явное-указание».', 'системное');
+    $('значение').value = '';
+    применить(данные.state);
+  } catch (ошибка) {
+    добавить('Ошибка: ' + ошибка.message, 'ошибка');
+  }
+};
+
+document.querySelectorAll('.слой').forEach(в => {
+  в.onchange = () => { if (состояние) { состояние.info.layers = слоиФормы().map(
+    к => ({кратко:'краткосрочная', рабочая:'рабочая', долго:'долговременная'})[к]); применить(состояние); } };
+});
+
+(async () => {
+  const ответ = await fetch('/api/state');
+  const с = await ответ.json();
+  применить(с);
+  с.dialog.forEach(м => добавить(м.content, м.role === 'user' ? 'от-пользователя' : 'от-агента'));
+  if (с.dialog.length) добавить('— выше восстановленный диалог из краткосрочной памяти —', 'системное');
+})();
+</script>
+</body>
+</html>
